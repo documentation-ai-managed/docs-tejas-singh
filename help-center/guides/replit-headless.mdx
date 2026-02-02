@@ -1,0 +1,306 @@
+---
+title: Run the Replit Headless Crash Detector
+description: Step-by-step guide to running a headless YOLOv8 collision detector on Replit with Telegram alerts using environment variables.
+---
+
+## Overview
+
+This guide shows you how to run a **headless** Python script on Replit that:
+
+- Reads a video file.
+- Runs YOLOv8 object detection.
+- Prints progress and detection logs to the Replit console.
+- Sends a Telegram alert with a snapshot when a critical event is detected.
+
+The script does **not** open any video window; everything runs in the cloud and logs appear in the console.
+
+## What you will set up
+
+You will:
+
+- Create a new Replit Python project.
+- Install the required Python packages via `requirements.txt`.
+- Configure:
+  - Your Telegram bot token as a Replit Secret.
+  - Your Telegram chat ID as a Replit Secret.
+  - Your video filename in the script.
+- Upload the video file and run the script.
+
+## Before you start
+
+You will need:
+
+- A Replit account.
+- A Telegram account on your phone or desktop.
+
+The script already includes instructions in comments for how to get:
+
+- **Telegram bot token**: via `@BotFather`.
+- **Chat ID**: via `@userinfobot`.
+
+## Step-by-step setup
+
+<Steps>
+  <Step title="Create a new Replit Python project" icon="plus" titleType="p">
+
+    1. In Replit, create a new **Python** project.
+    2. Open `main.py` and **clear all existing code** so the file is empty.
+
+  </Step>
+
+  <Step title="Add the Python dependencies" icon="package" titleType="p">
+
+    1. In the file sidebar, create a new file named `requirements.txt`.
+    2. Paste the following into `requirements.txt`:
+
+    ```text
+    ultralytics
+    opencv-python-headless
+    requests
+    pillow
+    ```
+
+    3. Replit will automatically install these dependencies when you click **Run** the first time (it may take a few minutes).
+
+  </Step>
+
+  <Step title="Paste the main script" icon="edit" titleType="p">
+
+    1. Open `main.py` in your Replit project.
+    2. Replace its contents with the **entire** script below.
+    3. You will edit only the `VIDEO_FILENAME` configuration variable in the next step; Telegram settings come from Replit Secrets.
+
+    ```python
+    import cv2
+    import requests
+    from ultralytics import YOLO
+    from datetime import datetime
+    import time
+    import os
+    import sys
+
+    # ==========================================
+    # 👇 USER CONFIGURATION (EDIT THIS PART ONLY)
+    # ==========================================
+
+    # 1. Upload your video to Replit and type its name here:
+    VIDEO_FILENAME = "test_video.mp4"
+
+    # ==========================================
+    # 🔐 SECRETS CONFIGURATION (SET IN REPLIT)
+    # ==========================================
+    # These are loaded from environment variables (Replit Secrets).
+    # Do not hardcode your real credentials in this file.
+
+    TELEGRAM_TOKEN = os.environ.get("TELEGRAM_TOKEN")
+    CHAT_ID = os.environ.get("CHAT_ID")
+
+    # Basic validation so the script fails fast with a clear message
+    if not TELEGRAM_TOKEN or not CHAT_ID:
+        print("❌ ERROR: Missing Telegram credentials.")
+        print("   Set the TELEGRAM_TOKEN and CHAT_ID secrets in Replit:")
+        print("   1. Click the lock (Secrets) icon in the left sidebar.")
+        print("   2. Add TELEGRAM_TOKEN with your bot token from @BotFather.")
+        print("   3. Add CHAT_ID with your numeric chat ID from @userinfobot.")
+        sys.exit(1)
+
+    # ==========================================
+    # 🚀 SYSTEM CODE (DO NOT TOUCH BELOW)
+    # ==========================================
+
+    def send_telegram_alert(image_path, confidence):
+        """Sends the SOS alert to your phone"""
+
+        print("🚀 Sending Telegram Alert...")
+        try:
+            # Send Text
+            timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            message = (
+                f"🚨 *ACCIDENT DETECTED!* 🚨\n\n"
+                f"⏰ Time: {timestamp}\n"
+                f"📊 Confidence: {confidence:.2%}\n"
+                f"🚑 Sending SOS Request..."
+            )
+            url = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendMessage"
+            requests.post(url, data={"chat_id": CHAT_ID, "text": message, "parse_mode": "Markdown"})
+
+            # Send Photo
+            url_photo = f"https://api.telegram.org/bot{TELEGRAM_TOKEN}/sendPhoto"
+            with open(image_path, "rb") as f:
+                requests.post(url_photo, data={"chat_id": CHAT_ID}, files={"photo": f})
+            
+            print("✅ Alert Sent Successfully!")
+        except Exception as e:
+            print(f"❌ Failed to send alert: {e}")
+
+    def main():
+        print("="*40)
+        print("🚗 STARTING COLLISION DETECTION SYSTEM")
+        print("="*40)
+
+        # 1. Load the AI Model
+        print("⏳ Loading AI Model (yolov8n)...")
+        try:
+            model = YOLO("yolov8n.pt")
+        except Exception as e:
+            print(f"❌ Error loading model: {e}")
+            return
+
+        # 2. Open the Video
+        if not os.path.exists(VIDEO_FILENAME):
+            print(f"❌ ERROR: Could not find '{VIDEO_FILENAME}'")
+            print("   Make sure you dragged and dropped the video file into the sidebar!")
+            return
+            
+        cap = cv2.VideoCapture(VIDEO_FILENAME)
+        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+        print(f"✅ Video loaded: {total_frames} frames to process.")
+
+        frame_count = 0
+        alert_sent = False
+        
+        # 3. Process Video Frame by Frame
+        print("\n🎥 Processing started. Watch the logs below...")
+        while cap.isOpened():
+            ret, frame = cap.read()
+            if not ret:
+                break
+                
+            frame_count += 1
+            if frame_count % 10 == 0:  # Print update every 10 frames
+                print(f"   Processing frame {frame_count}/{total_frames}...", end="\r")
+
+            # Run AI Detection
+            results = model(frame, verbose=False)
+            
+            for result in results:
+                for box in result.boxes:
+                    # Get the class name (what did it see?)
+                    class_id = int(box.cls[0])
+                    class_name = model.names[class_id]
+                    confidence = float(box.conf[0])
+
+                    # ⚠️ TRICK FOR DEMO: 
+                    # Since the basic model does not know "accident", we trigger on "car" 
+                    # if confidence is high, just to prove the system works.
+                    # CHANGE "car" to "accident" ONLY if you trained a custom model.
+                    if class_name in ["car", "truck", "bus", "accident"] and confidence > 0.6:
+                        
+                        # Simple logic: If we have not sent an alert yet, do it now.
+                        if not alert_sent:
+                            print(f"\n\n🚨 CRITICAL EVENT DETECTED: {class_name.upper()} detected!")
+                            
+                            # Save the snapshot
+                            cv2.imwrite("accident_snap.jpg", frame)
+                            
+                            # Send the alert
+                            send_telegram_alert("accident_snap.jpg", confidence)
+                            
+                            alert_sent = True
+                            print("✅ System requires reset to send next alert.")
+                            break
+            
+            if alert_sent:
+                print("\n🏁 Demo Event Complete. Stopping to save resources.")
+                break
+
+        cap.release()
+        print("\n" + "="*40)
+        print("✅ DEMO FINISHED")
+        print("="*40)
+
+    if __name__ == "__main__":
+        main()
+    ```
+
+  </Step>
+
+  <Step title="Configure Telegram and video settings" icon="settings" titleType="p">
+
+    In `main.py`, you only need to edit **one field** in the "USER CONFIGURATION" section. Telegram settings are provided via Replit Secrets.
+
+    1. **Video filename** (`VIDEO_FILENAME`)
+
+       - Choose a simple name for your video file (for example, `test_video.mp4`).
+       - Set `VIDEO_FILENAME` to that name, including the file extension.
+
+    2. **Telegram bot token secret** (`TELEGRAM_TOKEN`)
+
+       - In Telegram, search for `@BotFather`.
+       - Start a chat and create a new bot to get your bot token.
+       - In Replit, click the **lock (Secrets)** icon in the left sidebar.
+       - Add a new secret named `TELEGRAM_TOKEN` and paste your bot token as the value.
+
+    3. **Telegram chat ID secret** (`CHAT_ID`)
+
+       - In Telegram, search for `@userinfobot`.
+       - Start a chat and send `/start` to get your numeric chat ID.
+       - In Replit, in the same **Secrets** panel, add a secret named `CHAT_ID`.
+       - Paste your numeric chat ID as the value and save.
+
+  </Step>
+
+  <Step title="Upload your video to Replit" icon="upload" titleType="p">
+
+    1. In the Replit file sidebar, click the **three-dot menu** or use the upload control.
+    2. Drag and drop your video file into the file list, or select it via the file picker.
+    3. Confirm the filename in the sidebar exactly matches the `VIDEO_FILENAME` value in `main.py` (case-sensitive).
+
+  </Step>
+
+  <Step title="Run the headless detector" icon="play-circle" titleType="p">
+
+    1. In the Replit file sidebar, drag and drop your video file (for example, `test_video.mp4`) into the file list if you have not already.
+    2. Make sure the filename in the sidebar exactly matches the value you set in `VIDEO_FILENAME` in `main.py`.
+    3. Confirm that you have set the `TELEGRAM_TOKEN` and `CHAT_ID` secrets in the Replit **Secrets** panel.
+    4. Click the green **Run** button at the top of Replit.
+    5. The first run may take a few minutes while dependencies install and the YOLO model downloads.
+    6. Watch the **console** on the right:
+       - You will see logs such as:
+         - Model loading messages.
+         - Video loaded message with frame count.
+         - Periodic lines like `Processing frame 10/XXX...`.
+       - When a trigger condition is met, you will see:
+         - `CRITICAL EVENT DETECTED` with the detected class.
+         - A message about sending the Telegram alert.
+         - A note that the system requires reset to send another alert.
+    7. On your Telegram app, you should receive:
+       - A text message with timestamp and confidence.
+       - A photo snapshot (`accident_snap.jpg`) from the frame where the event was detected.
+
+  </Step>
+</Steps>
+
+## What to expect
+
+Once you click **Run**:
+
+- The console prints startup messages and `Loading AI Model (yolov8n)...`.
+- If the video loads, you see something like `Video loaded: 500 frames to process.`.
+- As frames are processed, you see lines like `Processing frame 10/500...` every few frames.
+- When a critical event is detected, the console shows `CRITICAL EVENT DETECTED` and `Sending Telegram Alert...`.
+- Within a few seconds, your phone should receive:
+  - A Telegram text alert with timestamp and confidence.
+  - A photo snapshot from the detection frame.
+
+## About the headless behavior
+
+- The script uses `opencv-python-headless`, so **no GUI windows** are opened.
+- All progress and detection information is printed to the **Replit console**.
+- This makes it suitable for running in the cloud or as a background process without any display.
+
+## Troubleshooting
+
+- **Missing video file error**: If you see `Could not find 'test_video.mp4'`, confirm that you dragged and dropped the video into the Replit file list and that the filename exactly matches `VIDEO_FILENAME`.
+- **Missing Telegram secrets error**: If you see `ERROR: Missing Telegram credentials`, open the Replit **Secrets** panel and make sure both `TELEGRAM_TOKEN` and `CHAT_ID` are defined with the correct values.
+- **No Telegram message received**: If the console shows `Alert Sent Successfully` but your phone does not receive anything, double-check that:
+  - You set `TELEGRAM_TOKEN` and `CHAT_ID` correctly in Replit Secrets.
+  - You started a chat with your bot in Telegram so it can send you messages.
+
+## Security notes
+
+- Treat your `TELEGRAM_TOKEN` like a **password**.
+- Do not commit your token or chat ID to public repositories.
+- In Replit:
+  - Use Replit Secrets or environment variables instead of hardcoding credentials in `main.py`.
+  - At minimum, avoid publishing the project publicly with real tokens visible anywhere in the code or logs.
